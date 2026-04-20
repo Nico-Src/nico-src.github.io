@@ -1,0 +1,1 @@
+import{e as t,o as n,c as a,t as s}from"./65q8Cmel.js";const c={class:"px-2 py-0.5 bg-surface-container-highest text-[10px] font-label text-on-surface-variant uppercase"},o=t({__name:"TechChip",props:{label:{}},setup(e){return(p,r)=>(n(),a("span",c,s(e.label),1))}}),i=Object.assign(o,{__name:"TechChip"});export{i as _};

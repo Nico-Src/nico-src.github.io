@@ -36,22 +36,27 @@ html,body{
     top: 20px;
     right: 20px;
     margin: auto;
-    width: 150px;
-    height: 60px;
-    background-color: white;
-    border-radius: 12px;
+    width: auto;
+    min-width: 130px;
+    height: auto;
+    padding: 8px 16px;
+    background-color: #d6c39b;
+    border: 3px solid #bfae8b;
+    border-radius: 4px;
     display:flex;
     justify-content: center;
     align-items: center;
-    flex-direction: column;
+    flex-direction: row;
+    gap: 8px;
     opacity: 0;
     pointer-events: none;
     transition: opacity .2s ease;
     overflow: hidden;
+    box-shadow: 0 0.2em #bfae8b, 0 0.3em #a59678;
 }
 
 #timer .time{
-    font-family: 'Orbitron';
+    font-family: 'Poppins';
     font-weight: bold;
     font-size: 16px;
     display:flex;
@@ -59,6 +64,7 @@ html,body{
     align-items: center;
     width: 100%;
     text-align: center;
+    color: #505050;
 }
 
 #level-select{
@@ -338,6 +344,33 @@ html,body{
     top: unset;
 }
 
+#win-banner{
+    position: fixed;
+    z-index: 20;
+    top: 40px;
+    left: 0;
+    right: 0;
+    margin: auto;
+    width: fit-content;
+    padding: 12px 40px;
+    background-color: #d6c39b;
+    border: 3px solid #bfae8b;
+    border-radius: 4px;
+    box-shadow: 0 0.3em #bfae8b, 0 0.4em #a59678;
+    font-family: 'Poppins';
+    font-weight: 800;
+    font-size: 28px;
+    color: #505050;
+    text-align: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .4s ease;
+}
+
+#win-banner.show{
+    opacity: 1;
+}
+
 #win-menu .btn.level-select,
 #win-menu .btn.menu{
     box-shadow: 0 0.6em rgb(94, 183, 86), 0 0.9em rgb(94, 164, 78);
@@ -386,14 +419,14 @@ html,body{
 #pause-banner::before {
     content: "";
     position: absolute;
-    width: 500%;
-    height: 2000%;
-    top: 0;
-    left: -2000px;
+    width: 300vw;
+    height: 300vh;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) rotate(30deg);
     filter: brightness(0.5);
     z-index: -1;
     background: url(../img/backgrounds/checkered.avif) 0 0 repeat;
-    transform: rotate(30deg);
     animation: bgScroll 50s linear infinite;
 }
 
@@ -491,11 +524,203 @@ html,body{
 #pause-banner.show,
 #level-select.show,
 #win-menu.show,
-#timer.show{
+#timer.show,
+#editor-ui.show{
     opacity: 1;
     pointer-events: all;
 }
 
 #pause-btn.show{
     transform: translateY(0em) translateX(0em);
+}
+
+/* Editor UI */
+#editor-ui{
+    position: fixed;
+    z-index: 20;
+    top: 0;
+    left: 0;
+    width: 260px;
+    height: 100%;
+    background-color: #d6c39b;
+    border-right: 3px solid #bfae8b;
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .2s ease;
+    overflow-y: auto;
+}
+
+#editor-ui .editor-toolbar{
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+}
+
+#editor-ui .editor-title{
+    font-family: 'Poppins';
+    font-weight: 800;
+    font-size: 22px;
+    color: #505050;
+    text-align: center;
+    padding-bottom: 8px;
+    border-bottom: 2px solid #bfae8b;
+}
+
+#editor-ui .editor-controls{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+
+#editor-ui .editor-controls label{
+    font-family: 'Poppins';
+    font-weight: 600;
+    font-size: 13px;
+    color: #505050;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+#editor-ui .editor-controls input[type="number"]{
+    width: 46px;
+    padding: 4px 6px;
+    border: 2px solid #bfae8b;
+    border-radius: 4px;
+    background: #e8d9b5;
+    font-family: 'Poppins';
+    font-weight: 600;
+    font-size: 13px;
+    color: #505050;
+    outline: none;
+}
+
+#editor-ui .editor-controls input[type="number"]:focus{
+    border-color: #a59678;
+}
+
+#editor-ui .editor-tools{
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+#editor-ui .btn{
+    background-color: transparent;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: 'Poppins';
+    font-weight: 600;
+    font-size: 13px;
+    transition: all .2s ease;
+    padding: 6px 12px;
+    gap: 6px;
+}
+
+#editor-ui .btn.editor-tool{
+    border: 2px solid #a59678;
+    color: #706040;
+}
+
+#editor-ui .btn.editor-tool.active{
+    background-color: #bfae8b;
+    color: #505050;
+    border-color: #8a7b5e;
+}
+
+#editor-ui .btn.editor-tool:hover{
+    background-color: #bfae8b;
+}
+
+#editor-ui .btn.editor-apply{
+    box-shadow: 0 0.3em #8a7b5e;
+    border: 2px solid #8a7b5e;
+    color: #706040;
+    flex: 1;
+}
+
+#editor-ui .btn.editor-apply:hover{
+    background-color: #bfae8b;
+    transform: translateY(0.1em);
+    box-shadow: 0 0.2em #8a7b5e;
+}
+
+#editor-ui .editor-color-picker{
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+#editor-ui .editor-color-picker input[type="color"]{
+    width: 100%;
+    height: 36px;
+    border: 2px solid #bfae8b;
+    border-radius: 4px;
+    background: #e8d9b5;
+    cursor: pointer;
+    padding: 2px;
+}
+
+#editor-ui .editor-info{
+    font-family: 'Poppins';
+    font-size: 12px;
+    color: #706040;
+    line-height: 1.5;
+    padding: 8px 0;
+}
+
+#editor-ui .editor-actions{
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 8px;
+    padding-top: 12px;
+    border-top: 2px solid #bfae8b;
+}
+
+#editor-ui .btn.editor-test{
+    box-shadow: 0 0.3em rgb(94, 183, 86);
+    border: 2px solid rgb(92, 164, 78);
+    color: rgb(92, 164, 78);
+}
+
+#editor-ui .btn.editor-test:hover{
+    background-color: rgb(109, 213, 100);
+    transform: translateY(0.1em);
+    box-shadow: 0 0.2em rgb(94, 183, 86);
+    color: white;
+}
+
+#editor-ui .btn.editor-export{
+    box-shadow: 0 0.3em rgb(70, 130, 180);
+    border: 2px solid rgb(60, 115, 160);
+    color: rgb(60, 115, 160);
+}
+
+#editor-ui .btn.editor-export:hover{
+    background-color: rgb(90, 150, 200);
+    transform: translateY(0.1em);
+    box-shadow: 0 0.2em rgb(70, 130, 180);
+    color: white;
+}
+
+#editor-ui .btn.editor-back{
+    box-shadow: 0 0.3em rgb(183, 86, 86);
+    border: 2px solid rgb(164, 78, 78);
+    color: rgb(164, 78, 78);
+}
+
+#editor-ui .btn.editor-back:hover{
+    background-color: rgb(234, 111, 111);
+    transform: translateY(0.1em);
+    box-shadow: 0 0.2em rgb(183, 86, 86);
+    color: white;
 }

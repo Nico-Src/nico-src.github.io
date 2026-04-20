@@ -11,12 +11,13 @@
 <body>
     <div id="menu" class="show">
         <div class="btn play" onclick="game.switchMode(MODES.LEVEL_SELECT)">Play</div>
-        <div class="btn editor" onclick="">Editor</div>
+        <div class="btn editor" onclick="game.switchMode(MODES.EDITING)">Editor</div>
     </div>
     <div id="pause-menu">
         <div class="btn resume" onclick="game.closePauseMenu();">Resume</div>
         <div class="btn menu" onclick="game.switchMode(MODES.MENU)">Back To Menu</div>
     </div>
+    <div id="win-banner"></div>
     <div id="win-menu">
         <div class="btn level-select" onclick="game.switchMode(MODES.LEVEL_SELECT);">Back To Level Select</div>
         <div class="btn menu" onclick="game.switchMode(MODES.MENU)">Back To Menu</div>
@@ -40,6 +41,28 @@
         <i class='bx bx-pause'></i>
     </div>
     <div id="pause-banner">PAUSED</div>
+    <div id="editor-ui">
+        <div class="editor-toolbar">
+            <div class="editor-title">Level Editor</div>
+            <div class="editor-tools">
+                <div class="btn editor-tool active" data-tool="place" onclick="game.setEditorTool('place')"><i class='bx bx-cube'></i> Place</div>
+                <div class="btn editor-tool" data-tool="remove" onclick="game.setEditorTool('remove')"><i class='bx bx-eraser'></i> Remove</div>
+                <div class="btn editor-tool" data-tool="color" onclick="game.setEditorTool('color')"><i class='bx bx-palette'></i> Color</div>
+            </div>
+            <div class="editor-color-picker" style="display:none;">
+                <input type="color" id="editor-color" value="#ff0000">
+            </div>
+            <div class="editor-info">
+                Click on the grid to place blocks.<br>
+                Click on a block face to stack.
+            </div>
+            <div class="editor-actions">
+                <div class="btn editor-test" onclick="game.editorTest()"><i class='bx bx-play'></i> Test</div>
+                <div class="btn editor-export" onclick="game.editorExport()"><i class='bx bx-download'></i> Export</div>
+                <div class="btn editor-back" onclick="game.switchMode(MODES.MENU)"><i class='bx bx-arrow-back'></i> Back</div>
+            </div>
+        </div>
+    </div>
     <script src="js/level-data.js"></script>
     <script src="js/three.js"></script>
     <script src="js/orbit-controls.js"></script>

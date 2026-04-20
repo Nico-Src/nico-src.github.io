@@ -3,6 +3,7 @@ const MODES = {
     PLAYING: 1,
     LEVEL_SELECT: 2,
     EDITING: 3,
+    WON: 4,
 };
 
 const BLOCK_STATE = {

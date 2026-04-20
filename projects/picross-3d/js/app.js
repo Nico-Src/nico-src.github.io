@@ -6,12 +6,15 @@ class Game{
         this.menu = document.querySelector('#menu');
         this.pauseMenu = document.querySelector('#pause-menu');
         this.winMenu = document.querySelector('#win-menu');
+        this.editorUI = document.querySelector('#editor-ui');
         this.timerWindow = document.querySelector('#timer');
         this.timerEl = this.timerWindow.querySelector('.time');
         this.timerEl.innerHTML = `<i class='bx bxs-time'></i>&nbsp;${Util.formatSeconds(0)}`;
+        this.winBanner = document.querySelector('#win-banner');
 
         this.currentMode = mode;
         this.transitions = [];
+        this.lastTime = performance.now();
         this.textureManager = new TextureManager(new THREE.TextureLoader());
 
         this.level = undefined;
@@ -95,8 +98,8 @@ class Game{
         this.camera.position.y = 10;
         this.camera.position.z = 10;
 
-        const size = 10;
-        const divisions = 10;
+        const size = 9;
+        const divisions = 9;
 
         // init grid
         this.gridHelper = new THREE.GridHelper(size, divisions, new THREE.Color(0xFFFFFF), new THREE.Color(0xAAAAAA));
@@ -121,14 +124,18 @@ class Game{
 
     // start rendering
     run(){
-        this.animate();
+        this.lastTime = performance.now();
+        this.animate(this.lastTime);
     }
 
     // render loop
-    animate() {
+    animate(now) {
         requestAnimationFrame(this.animate.bind(this));
+        // calculate delta time in seconds for frame-rate independent transitions
+        const dt = Math.min((now - this.lastTime) / 1000, 0.1); // cap at 100ms
+        this.lastTime = now;
         this.controls.update();
-        this.handleTransitions();
+        this.handleTransitions(dt);
         this.renderer.render(this.scene, this.camera);
     }
 
@@ -143,8 +150,9 @@ class Game{
     // mouse down handler
     mouseDown(e){
         e.preventDefault();
-        // nothing on left click
-        if(e.button === 0 || this.pauseMenu.classList.contains('show')) return;
+        // nothing on left click (unless in editor)
+        if(this.pauseMenu.classList.contains('show')) return;
+        if(e.button === 0 && this.currentMode !== MODES.EDITING) return;
 
         // calc 3d mouse vector
         const mouse3D = Util.pointToVector(e.clientX, e.clientY);    
@@ -154,6 +162,49 @@ class Game{
         raycaster.setFromCamera(mouse3D, this.camera);
         // check if raycaster intersects with any objects (apart from objects that have raycast disabled)
         const intersects = raycaster.intersectObjects(this.scene.children.filter(c => !c.disableRaycast));
+
+        // editor mode handling
+        if(this.currentMode === MODES.EDITING){
+            if(e.button === 2 || e.button === 0){
+                if(intersects.length > 0){
+                    const hit = intersects[0];
+                    const obj = hit.object;
+
+                    if(obj.name === 'editor-ground'){
+                        // clicked on ground plane — place block at grid position (y=0)
+                        if(this.editorTool === 'place'){
+                            const point = hit.point;
+                            const x = Math.floor(point.x);
+                            const y = 0;
+                            const z = Math.floor(point.z);
+                            if(x >= 0 && x < 9 && z >= 0 && z < 9){
+                                this.editorPlaceBlock(x, y, z);
+                            }
+                        }
+                    } else if(obj.name === 'block'){
+                        const x = Math.floor(obj.position.x);
+                        const y = Math.floor(obj.position.y);
+                        const z = Math.floor(obj.position.z);
+
+                        if(this.editorTool === 'remove'){
+                            this.editorRemoveBlock(x, y, z);
+                        } else if(this.editorTool === 'color'){
+                            this.editorColorBlock(x, y, z);
+                        } else if(this.editorTool === 'place'){
+                            // place on the face that was clicked (adjacent block)
+                            const face = hit.face.normal;
+                            const nx = x + Math.round(face.x);
+                            const ny = y + Math.round(face.y);
+                            const nz = z + Math.round(face.z);
+                            if(nx >= 0 && nx < 9 && ny >= 0 && ny < 9 && nz >= 0 && nz < 9){
+                                this.editorPlaceBlock(nx, ny, nz);
+                            }
+                        }
+                    }
+                }
+            }
+            return;
+        }
 
         if(intersects.length > 0){
             if(e.button === 2 && e.altKey){
@@ -180,19 +231,15 @@ class Game{
                     // TODO: reduce players life
                     return;
                 }
-                this.transitions.push(new Transition(obj, 'scale', 0.0, 1.0, 'out', 0.02));
+                this.transitions.push(new Transition(obj, 'scale', 0.0, 1.0, 'out', 3.0, ()=>{
+                    obj.geometry.dispose();
+                    this.disposeMaterials(obj);
+                    this.scene.remove(obj);
+                }));
                 obj.disableRaycast = true;
                 // remove block from blocks array
                 this.level.blocks[x][y][z] = undefined;
                 this.checkForRowsColumns(x,y,z);
-                setTimeout(()=>{
-                    // destroy block and dispose materials and geometry to not leak any memory
-                    obj.geometry.dispose();
-                    obj.material.forEach((mat)=>{
-                        mat.dispose();
-                    });
-                    this.scene.remove(obj);
-                },400);
             // right click without alt key
             } else if(e.button === 2){
                 // layer, z, x
@@ -219,92 +266,82 @@ class Game{
         }
     }
 
-    // handle transitions
-    handleTransitions(){
-        const transitionsToAdd = []; const transitionsToRemove = [];
+    // handle transitions (dt = delta time in seconds)
+    handleTransitions(dt){
+        const transitionsToRemove = [];
         for(const transition of this.transitions){
+            const step = transition.speed * dt;
+            const done = (t) => {
+                transitionsToRemove.push(t);
+                if(t.onComplete) t.onComplete();
+            };
             switch(transition.prop){
                 case 'scale':
-                    // check which way the transition goes
                     if(transition.to > transition.from){
-                        // check if transition is still ongoing
                         if(transition.target.scale.x < transition.to){
-                            transition.target.scale.x += transition.step;
-                            transition.target.scale.y += transition.step;
-                            transition.target.scale.z += transition.step;
-                        // if transition was of type 'in' add reverse transition and remove current transition
+                            transition.target.scale.x = Math.min(transition.target.scale.x + step, transition.to);
+                            transition.target.scale.y = transition.target.scale.x;
+                            transition.target.scale.z = transition.target.scale.x;
                         } else if(transition.type === 'in') {
                             transition.target.scale.x = transition.to;
                             transition.target.scale.y = transition.to;
                             transition.target.scale.z = transition.to;
                             transitionsToRemove.push(transition);
-                            this.transitions.push(new Transition(transition.target, 'scale', transition.from, transition.to, 'out'));
-                        // else just remove current transition
+                            this.transitions.push(new Transition(transition.target, 'scale', transition.from, transition.to, 'out', transition.speed, transition.onComplete));
                         } else {
                             transition.target.scale.x = transition.to;
                             transition.target.scale.y = transition.to;
                             transition.target.scale.z = transition.to;
-                            transitionsToRemove.push(transition);
+                            done(transition);
                         }
                     } else {
-                        // check if transition is still ongoing
                         if(transition.target.scale.x > transition.to){
-                            transition.target.scale.x -= transition.step;
-                            transition.target.scale.y -= transition.step;
-                            transition.target.scale.z -= transition.step;
-                        // if transition was of type 'in' add reverse transition and remove current transition
+                            transition.target.scale.x = Math.max(transition.target.scale.x - step, transition.to);
+                            transition.target.scale.y = transition.target.scale.x;
+                            transition.target.scale.z = transition.target.scale.x;
                         } else if(transition.type === 'in') {
                             transition.target.scale.x = transition.to;
                             transition.target.scale.y = transition.to;
                             transition.target.scale.z = transition.to;
                             transitionsToRemove.push(transition);
-                            this.transitions.push(new Transition(transition.target, 'scale', transition.from, transition.to, 'out'));
-                        // else just remove current transition
+                            this.transitions.push(new Transition(transition.target, 'scale', transition.from, transition.to, 'out', transition.speed, transition.onComplete));
                         } else {
                             transition.target.scale.x = transition.to;
                             transition.target.scale.y = transition.to;
                             transition.target.scale.z = transition.to;
-                            transitionsToRemove.push(transition);
+                            done(transition);
                         }
                     }
                     break;
                 case 'opacity':
-                    // check which way the transition goes
                     if(transition.to > transition.from){
-                        // check if transition is still ongoing
                         if(transition.target.material.opacity < transition.to){
-                            transition.target.material.opacity += transition.step;
-                        // if transition was of type 'in' add reverse transition and remove current transition
+                            transition.target.material.opacity = Math.min(transition.target.material.opacity + step, transition.to);
                         } else if(transition.type === 'in') {
                             transition.target.material.opacity = transition.to;
                             transitionsToRemove.push(transition);
-                            this.transitions.push(new Transition(transition.target, 'opacity', transition.from, transition.to, 'out'));
-                        // else just remove current transition
+                            this.transitions.push(new Transition(transition.target, 'opacity', transition.from, transition.to, 'out', transition.speed, transition.onComplete));
                         } else {
                             transition.target.material.opacity = transition.to;
-                            transitionsToRemove.push(transition);
+                            done(transition);
                         }
                     } else {
-                        // check if transition is still ongoing
                         if(transition.target.material.opacity > transition.to){
-                            transition.target.material.opacity -= transition.step;
-                        // if transition was of type 'in' add reverse transition and remove current transition
+                            transition.target.material.opacity = Math.max(transition.target.material.opacity - step, transition.to);
                         } else if(transition.type === 'in') {
                             transition.target.material.opacity = transition.to;
                             transitionsToRemove.push(transition);
-                            this.transitions.push(new Transition(transition.target, 'opacity', transition.from, transition.to, 'out'));
-                        // else just remove current transition
+                            this.transitions.push(new Transition(transition.target, 'opacity', transition.from, transition.to, 'out', transition.speed, transition.onComplete));
                         } else {
-                            transition.target.material.opacity
-                            transitionsToRemove.push(transition);
+                            transition.target.material.opacity = transition.to;
+                            done(transition);
                         }
                     }
                     break;
             }
         }
 
-        // add new transitions and remove finished transitions
-        for(const transition of transitionsToAdd) this.transitions.push(transition);
+        // remove finished transitions
         for(const transition of transitionsToRemove) this.transitions.splice(this.transitions.indexOf(transition),1);
     }
 
@@ -353,7 +390,7 @@ class Game{
         // add upscale transition if block should be scaled up
         if(transition){
             setTimeout(()=>{
-                this.transitions.push(new Transition(block, 'scale', 1.0, 0.0, 'out', 0.02));
+                this.transitions.push(new Transition(block, 'scale', 1.0, 0.0, 'out', 3.0));
             }, 200 + (10 * index));
         }
     }
@@ -438,7 +475,7 @@ class Game{
             // remove handles (transition them out)
             for(const handle of this.level.layerHandles){
                 handle.setPosition(handle.originPos.x, handle.originPos.y, handle.originPos.z);
-                this.transitions.push(new Transition(handle.handle, 'opacity', 0.0, 1.0, 'out', 0.02));
+                this.transitions.push(new Transition(handle.handle, 'opacity', 0.0, 1.0, 'out', 3.0));
             }
 
             // set colors after a little delay and switch to won mode after
@@ -501,7 +538,9 @@ class Game{
                     clearInterval(this.levelTimerInterval);
                 }
 
+                this.controls.autoRotate = false;
                 this.controls.enabled = false;
+                this.winBanner.classList.remove('show');
                 // update dom elements
                 setTimeout(()=>{
                     this.menu.classList.add('show');
@@ -511,44 +550,56 @@ class Game{
                     this.levelSelectMenu.classList.remove('show');
                     this.winMenu.classList.remove('show');
                     this.timerWindow.classList.remove('show');
+                    this.editorUI.classList.remove('show');
                 }, prevMode === MODES.LEVEL_SELECT ? 0 : 300);
 
                 // transition grid out
-                this.transitions.push(new Transition(this.gridHelper, 'scale', 0.0, 1.0, 'out', 0.03));
+                this.transitions.push(new Transition(this.gridHelper, 'scale', 0.0, 1.0, 'out', 3.0));
 
-                // reset level and layer handles
-                for(const handle of this.level.layerHandles){
-                    handle.handle.geometry.dispose();
-                    handle.handle.material.dispose();
-                    this.transitions.push(new Transition(handle.handle, 'opacity', 0.0, 1.0, 'out', 0.02));
-                    setTimeout(()=>{
-                        this.scene.remove(handle.handle);
-                    },400);
+                // clean up editor if coming from editor
+                if(prevMode === MODES.EDITING){
+                    if(this.editorBlocks){
+                        for(const [key, entry] of this.editorBlocks){
+                            this.transitions.push(new Transition(entry.mesh, 'scale', 0.0, 1.0, 'out', 3.0, ()=>{
+                                entry.mesh.geometry.dispose();
+                                this.disposeMaterials(entry.mesh);
+                                this.scene.remove(entry.mesh);
+                            }));
+                            entry.mesh.disableRaycast = true;
+                        }
+                        this.editorBlocks.clear();
+                    }
+                    if(this.editorGround){
+                        this.scene.remove(this.editorGround);
+                        this.editorGround.geometry.dispose();
+                        this.editorGround.material.dispose();
+                        this.editorGround = undefined;
+                    }
                 }
 
-                // disable and dispose drag controls 
-                this.dragControls.deactivate();
-                this.dragControls.dispose();
-                this.dragControls = undefined;
+                if(this.level){
+                    // reset level and layer handles
+                    for(const handle of this.level.layerHandles){
+                        this.transitions.push(new Transition(handle.handle, 'opacity', 0.0, 1.0, 'out', 3.0, ()=>{
+                            handle.handle.geometry.dispose();
+                            handle.handle.material.dispose();
+                            this.scene.remove(handle.handle);
+                        }));
+                    }
 
-                this.level.layerHandles = [];
-                this.level = undefined;
+                    // disable and dispose drag controls
+                    if(this.dragControls){
+                        this.dragControls.deactivate();
+                        this.dragControls.dispose();
+                        this.dragControls = undefined;
+                    }
+
+                    this.level.layerHandles = [];
+                    this.level = undefined;
+                }
 
                 // remove all blocks
-                for(const obj of this.scene.children.filter(c => c.name === 'block')){
-                    // transition block out
-                    this.transitions.push(new Transition(obj, 'scale', 0.0, 1.0, 'out', 0.02));
-                    // disable raycast so block doesnt block other blocks behind it while it transitions
-                    obj.disableRaycast = true;
-                    setTimeout(()=>{
-                        // destroy block and dispose materials and geometry to not leak any memory
-                        obj.geometry.dispose();
-                        obj.material.forEach((mat)=>{
-                            mat.dispose();
-                        });
-                        this.scene.remove(obj);
-                    },400 + (10 * this.scene.children.indexOf(obj))); // small delay after each block
-                }
+                this.cleanupBlocks();
                 break;
             case MODES.PLAYING:
                 if(this.levelTimerInterval){
@@ -563,10 +614,11 @@ class Game{
                 this.pauseBtn.classList.add('show');
                 this.levelSelectMenu.classList.remove('show');
                 this.timerWindow.classList.add('show');
+                this.editorUI.classList.remove('show');
                 
                 // load level
                 this.level = await Level.loadFromFile(lvl);
-                this.transitions.push(new Transition(this.gridHelper, 'scale', 1.0, 0.0, 'out', 0.03));
+                this.transitions.push(new Transition(this.gridHelper, 'scale', 1.0, 0.0, 'out', 3.0));
 
                 // create box and set position
                 this.level.layerHandles.push(new LayerHandle(this.scene, 0x00FF00, {x: this.level.size.x, y: this.level.size.y + 1, z: this.level.size.z}, undefined, ['x','z']));
@@ -650,9 +702,9 @@ class Game{
 
                 // fade in handles
                 setTimeout(()=>{
-                    this.transitions.push(new Transition(this.level.layerHandles[0].handle, 'opacity', 1.0, 0.0, 'out', 0.02));
-                    this.transitions.push(new Transition(this.level.layerHandles[1].handle, 'opacity', 1.0, 0.0, 'out', 0.02));
-                    this.transitions.push(new Transition(this.level.layerHandles[2].handle, 'opacity', 1.0, 0.0, 'out', 0.02));
+                    this.transitions.push(new Transition(this.level.layerHandles[0].handle, 'opacity', 1.0, 0.0, 'out', 3.0));
+                    this.transitions.push(new Transition(this.level.layerHandles[1].handle, 'opacity', 1.0, 0.0, 'out', 3.0));
+                    this.transitions.push(new Transition(this.level.layerHandles[2].handle, 'opacity', 1.0, 0.0, 'out', 3.0));
                 },500);
 
                 let index = 0;
@@ -686,7 +738,9 @@ class Game{
                     clearInterval(this.levelTimerInterval);
                 }
 
+                this.controls.autoRotate = false;
                 this.controls.enabled = false;
+                this.winBanner.classList.remove('show');
                 this.levelSelectMenu.classList.add('show');
                 this.menu.classList.remove('show');
                 this.pauseBtn.classList.remove('show');
@@ -694,20 +748,20 @@ class Game{
                 this.pauseBanner.classList.remove('show');
                 this.winMenu.classList.remove('show');
                 this.timerWindow.classList.remove('show');
+                this.editorUI.classList.remove('show');
 
                 // if previous mode was won than level has to be cleaned up
                 if(prevMode === MODES.WON){
                     // transition grid out
-                    this.transitions.push(new Transition(this.gridHelper, 'scale', 0.0, 1.0, 'out', 0.03));
+                    this.transitions.push(new Transition(this.gridHelper, 'scale', 0.0, 1.0, 'out', 3.0));
 
                     // reset level and layer handles
                     for(const handle of this.level.layerHandles){
-                        handle.handle.geometry.dispose();
-                        handle.handle.material.dispose();
-                        this.transitions.push(new Transition(handle.handle, 'opacity', 0.0, 1.0, 'out', 0.02));
-                        setTimeout(()=>{
+                        this.transitions.push(new Transition(handle.handle, 'opacity', 0.0, 1.0, 'out', 3.0, ()=>{
+                            handle.handle.geometry.dispose();
+                            handle.handle.material.dispose();
                             this.scene.remove(handle.handle);
-                        },400);
+                        }));
                     }
 
                     // disable and dispose drag controls 
@@ -720,16 +774,12 @@ class Game{
 
                     // remove all blocks
                     for(const obj of this.scene.children.filter(c => c.name === 'block')){
-                        // transition block out
-                        this.transitions.push(new Transition(obj, 'scale', 0.0, 1.0, 'out', 0.02));
-                        // disable raycast so block doesnt block other blocks behind it while it transitions
-                        obj.disableRaycast = true;
-                        setTimeout(()=>{
-                            // destroy block and dispose materials and geometry to not leak any memory
+                        this.transitions.push(new Transition(obj, 'scale', 0.0, 1.0, 'out', 3.0, ()=>{
                             obj.geometry.dispose();
-                            obj.material.dispose();
+                            this.disposeMaterials(obj);
                             this.scene.remove(obj);
-                        },400 + (10 * this.scene.children.indexOf(obj))); // small delay after each block
+                        }));
+                        obj.disableRaycast = true;
                     }
                 }
 
@@ -758,6 +808,16 @@ class Game{
                 if(this.levelTimerInterval){
                     clearInterval(this.levelTimerInterval);
                 }
+
+                // start auto-rotating around the completed model
+                this.controls.autoRotate = true;
+                this.controls.autoRotateSpeed = 4.0;
+                this.controls.enabled = true;
+
+                // show level name
+                const levelName = LEVEL_DATA[this.level.path] ? LEVEL_DATA[this.level.path].name : 'Level Complete';
+                this.winBanner.textContent = levelName;
+                this.winBanner.classList.add('show');
 
                 // get the level progress from local storage
                 const wonLevels = localStorage.getItem('level_progress');
@@ -800,7 +860,45 @@ class Game{
                     this.pauseBanner.classList.remove('show');
                     this.levelSelectMenu.classList.remove('show');
                     this.winMenu.classList.add('show');
+                    this.editorUI.classList.remove('show');
                 }, 300);
+
+                // hide timer
+                this.timerWindow.classList.remove('show');
+                this.pauseBtn.classList.remove('show');
+                break;
+            case MODES.EDITING:
+                this.controls.enabled = true;
+                // hide all other UI
+                this.menu.classList.remove('show');
+                this.pauseBtn.classList.remove('show');
+                this.pauseMenu.classList.remove('show');
+                this.pauseBanner.classList.remove('show');
+                this.levelSelectMenu.classList.remove('show');
+                this.winMenu.classList.remove('show');
+                this.timerWindow.classList.remove('show');
+                this.editorUI.classList.add('show');
+
+                // editor state
+                this.editorTool = 'place';
+                this.editorBlocks = new Map(); // key: "x,y,z" -> { mesh, color }
+                this.editorGridSize = 9; // current grid size (units)
+
+                // show grid
+                this.transitions.push(new Transition(this.gridHelper, 'scale', 1.0, 0.0, 'out', 3.0));
+                this.gridHelper.position.x = this.editorGridSize / 2;
+                this.gridHelper.position.z = this.editorGridSize / 2;
+                this.controls.target = this.gridHelper.position;
+
+                // add ground plane for raycasting (invisible)
+                this.editorGround = new THREE.Mesh(
+                    new THREE.PlaneGeometry(this.editorGridSize, this.editorGridSize),
+                    new THREE.MeshBasicMaterial({ visible: false })
+                );
+                this.editorGround.rotation.x = -Math.PI / 2;
+                this.editorGround.position.set(this.editorGridSize / 2, 0, this.editorGridSize / 2);
+                this.editorGround.name = 'editor-ground';
+                this.scene.add(this.editorGround);
                 break;
         }
     }
@@ -871,6 +969,216 @@ class Game{
             this.levelTimer += 1;
             this.timerEl.innerHTML = `<i class='bx bxs-time'></i>&nbsp;${Util.formatSeconds(this.levelTimer)}`;
         },1000);
+    }
+
+    // safely dispose a block's materials (handles both array and single material)
+    disposeMaterials(obj){
+        if(Array.isArray(obj.material)){
+            obj.material.forEach((mat) => mat.dispose());
+        } else {
+            obj.material.dispose();
+        }
+    }
+
+    // transition out and remove all blocks from the scene
+    cleanupBlocks(){
+        for(const obj of this.scene.children.filter(c => c.name === 'block')){
+            this.transitions.push(new Transition(obj, 'scale', 0.0, 1.0, 'out', 3.0, ()=>{
+                obj.geometry.dispose();
+                this.disposeMaterials(obj);
+                this.scene.remove(obj);
+            }));
+            obj.disableRaycast = true;
+        }
+    }
+
+    // --- Editor methods ---
+
+    setEditorTool(tool){
+        this.editorTool = tool;
+        document.querySelectorAll('#editor-ui .editor-tool').forEach(el => el.classList.remove('active'));
+        document.querySelector(`#editor-ui .editor-tool[data-tool="${tool}"]`).classList.add('active');
+        document.querySelector('#editor-ui .editor-color-picker').style.display = tool === 'color' ? 'flex' : 'none';
+    }
+
+    editorPlaceBlock(x, y, z){
+        const key = `${x},${y},${z}`;
+        if(this.editorBlocks.has(key)) return;
+
+        const geometry = new THREE.BoxGeometry(1, 1, 1);
+        const color = '#ffffff';
+        const material = new THREE.MeshPhongMaterial({ color: new THREE.Color(color) });
+        material.specular = new THREE.Color(0x000000);
+        const block = new THREE.Mesh(geometry, material);
+
+        block.name = 'block';
+        block.position.x = x + this.gridOffset;
+        block.position.y = y + this.gridOffset;
+        block.position.z = z + this.gridOffset;
+
+        block.scale.set(0, 0, 0);
+        this.transitions.push(new Transition(block, 'scale', 1.0, 0.0, 'out', 3.0));
+
+        this.editorBlocks.set(key, { mesh: block, color: color });
+        this.scene.add(block);
+
+        // expand grid if block is near the edge
+        this.editorUpdateGrid();
+    }
+
+    // expand grid and ground plane when blocks reach the edge
+    editorUpdateGrid(){
+        if(this.editorBlocks.size === 0) return;
+
+        // find max x and z among placed blocks
+        let maxX = 0, maxZ = 0;
+        for(const key of this.editorBlocks.keys()){
+            const [x, , z] = key.split(',').map(Number);
+            if(x + 1 > maxX) maxX = x + 1;
+            if(z + 1 > maxZ) maxZ = z + 1;
+        }
+
+        // need at least 1 cell of margin beyond the furthest block, max 9
+        const needed = Math.min(Math.max(maxX + 1, maxZ + 1, 9), 9);
+        if(needed <= this.editorGridSize) return;
+
+        // grow grid
+        this.editorGridSize = needed;
+        const half = this.editorGridSize / 2;
+
+        // replace grid helper
+        this.scene.remove(this.gridHelper);
+        this.gridHelper.geometry.dispose();
+        if(Array.isArray(this.gridHelper.material)){
+            this.gridHelper.material.forEach(m => m.dispose());
+        } else {
+            this.gridHelper.material.dispose();
+        }
+        this.gridHelper = new THREE.GridHelper(this.editorGridSize, this.editorGridSize, new THREE.Color(0xFFFFFF), new THREE.Color(0xAAAAAA));
+        this.gridHelper.disableRaycast = true;
+        this.gridHelper.position.x = half;
+        this.gridHelper.position.z = half;
+        this.scene.add(this.gridHelper);
+        this.controls.target = this.gridHelper.position;
+
+        // replace ground plane
+        this.scene.remove(this.editorGround);
+        this.editorGround.geometry.dispose();
+        this.editorGround.material.dispose();
+        this.editorGround = new THREE.Mesh(
+            new THREE.PlaneGeometry(this.editorGridSize, this.editorGridSize),
+            new THREE.MeshBasicMaterial({ visible: false })
+        );
+        this.editorGround.rotation.x = -Math.PI / 2;
+        this.editorGround.position.set(half, 0, half);
+        this.editorGround.name = 'editor-ground';
+        this.scene.add(this.editorGround);
+    }
+
+    editorRemoveBlock(x, y, z){
+        const key = `${x},${y},${z}`;
+        const entry = this.editorBlocks.get(key);
+        if(!entry) return;
+        const block = entry.mesh;
+        this.editorBlocks.delete(key);
+        block.disableRaycast = true;
+        this.transitions.push(new Transition(block, 'scale', 0.0, 1.0, 'out', 3.0, ()=>{
+            block.geometry.dispose();
+            this.disposeMaterials(block);
+            this.scene.remove(block);
+        }));
+    }
+
+    editorColorBlock(x, y, z){
+        const key = `${x},${y},${z}`;
+        const entry = this.editorBlocks.get(key);
+        if(!entry) return;
+        const color = document.getElementById('editor-color').value;
+        entry.color = color;
+        entry.mesh.material.color.set(new THREE.Color(color));
+        this.transitions.push(new Transition(entry.mesh, 'scale', 1.05, 1.0, 'in'));
+    }
+
+    // calculate bounding box of all placed blocks
+    editorGetBounds(){
+        let minX = Infinity, minY = Infinity, minZ = Infinity;
+        let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+        for(const key of this.editorBlocks.keys()){
+            const [x, y, z] = key.split(',').map(Number);
+            minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+            minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+            minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
+        }
+        return { minX, minY, minZ, maxX, maxY, maxZ };
+    }
+
+    editorGenerateLvl(){
+        if(this.editorBlocks.size === 0) return null;
+        const { minX, minY, minZ, maxX, maxY, maxZ } = this.editorGetBounds();
+        const sx = maxX - minX + 1;
+        const sy = maxY - minY + 1;
+        const sz = maxZ - minZ + 1;
+        let lines = [`${sx} ${sy} ${sz}`];
+
+        for(let y = minY; y <= maxY; y++){
+            for(let z = minZ; z <= maxZ; z++){
+                let blockLine = '';
+                let colors = [];
+                for(let x = minX; x <= maxX; x++){
+                    const key = `${x},${y},${z}`;
+                    const entry = this.editorBlocks.get(key);
+                    if(entry){
+                        blockLine += '1';
+                        colors.push(entry.color || '#ffffff');
+                    } else {
+                        blockLine += '0';
+                    }
+                }
+                if(colors.length > 0){
+                    blockLine += ' ' + colors.join(';');
+                }
+                lines.push(blockLine);
+            }
+        }
+        return lines.join('\n');
+    }
+
+    editorTest(){
+        const lvlContent = this.editorGenerateLvl();
+        if(!lvlContent) return;
+
+        const blob = new Blob([lvlContent], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+
+        // clean up editor scene
+        for(const [key, entry] of this.editorBlocks){
+            entry.mesh.geometry.dispose();
+            this.disposeMaterials(entry.mesh);
+            this.scene.remove(entry.mesh);
+        }
+        this.editorBlocks.clear();
+        if(this.editorGround){
+            this.scene.remove(this.editorGround);
+            this.editorGround.geometry.dispose();
+            this.editorGround.material.dispose();
+            this.editorGround = undefined;
+        }
+
+        this.editorUI.classList.remove('show');
+        this.currentMode = MODES.MENU;
+        this.level = undefined;
+        this.switchMode(MODES.PLAYING, url);
+    }
+
+    editorExport(){
+        const content = this.editorGenerateLvl();
+        if(!content) return;
+        const blob = new Blob([content], { type: 'text/plain' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'level.lvl';
+        a.click();
+        URL.revokeObjectURL(a.href);
     }
 }
 
